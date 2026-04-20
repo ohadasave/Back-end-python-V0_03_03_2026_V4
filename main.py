@@ -66,12 +66,12 @@ START_TIME = datetime.now().isoformat()
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Clara Backend Server')
 parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to')
-parser.add_argument('--port', type=int, default=5000, help='Port to bind to')
+parser.add_argument('--port', type=int, default=None, help='Port to bind to')
 args = parser.parse_args()
 
-# Use the provided host and port
+# Use the provided host and port (with environment variable support for Render/Railway)
 HOST = args.host
-PORT = args.port
+PORT = args.port if args.port is not None else int(os.getenv('PORT', 5000))
 
 logger.info(f"Starting server on {HOST}:{PORT}")
 
@@ -102,6 +102,14 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ Google Drive PDF Proxy not available: {e}")
 
+# Import and include the Editeur router (Test de switch backend)
+try:
+    from endpoint_editeur import router as editeur_router
+    app.include_router(editeur_router)
+    logger.info("✅ Endpoint Editeur router loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Endpoint Editeur not available: {e}")
+
 # Import and include the Word Export router
 try:
     from word_export import router as word_router
@@ -126,6 +134,14 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ États Financiers not available: {e}")
 
+# Import and include the Export Liasse router
+try:
+    from export_liasse import router as export_liasse_router
+    app.include_router(export_liasse_router)
+    logger.info("✅ Export Liasse router loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Export Liasse not available: {e}")
+
 # Import and include the Échantillonnage Audit router
 try:
     from echantillonnage import router as echantillonnage_router
@@ -134,15 +150,85 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ Échantillonnage not available: {e}")
 
-# Import and include the diffusers API router
-# Add CORS middleware
+# Import and include the Export Synthèse CAC router
+try:
+    from export_synthese_cac import router as synthese_cac_router
+    app.include_router(synthese_cac_router)
+    logger.info("✅ Export Synthèse CAC router loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Export Synthèse CAC not available: {e}")
+
+# Export Synthèse CAC V2 (version programmatique sans template)
+try:
+    from export_synthese_cac_v2 import router as synthese_cac_v2_router
+    app.include_router(synthese_cac_v2_router)
+    logger.info("✅ Export Synthèse CAC V2 router loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Export Synthèse CAC V2 not available: {e}")
+
+# Export Synthèse CAC FINAL (version avec template + contenu complet)
+try:
+    from export_synthese_cac_final import router as synthese_cac_final_router
+    app.include_router(synthese_cac_final_router)
+    logger.info("✅ Export Synthèse CAC FINAL router loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Export Synthèse CAC FINAL not available: {e}")
+
+# ─── CORS Configuration ───────────────────────────────────────────────────────
+# ⚠️  RÈGLE CRITIQUE : allow_origins=["*"] ET allow_credentials=True
+#     ne peuvent PAS être combinés (RFC 6454 / Fetch spec).
+#     Les navigateurs rejettent systématiquement cette combinaison.
+#
+# Solution : lister explicitement les origines autorisées.
+# Pour ajouter une nouvelle origine : ajouter à ALLOWED_ORIGINS ou
+# définir la variable d'environnement ALLOWED_ORIGINS (séparées par virgule).
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DEFAULT_ORIGINS = [
+    # ── Développement local ──────────────────────────────────────────────
+    "http://localhost:5173",        # Vite dev server (défaut)
+    "http://localhost:3000",        # CRA / autres frameworks
+    "http://localhost:4173",        # Vite preview
+    "http://localhost:8080",        # Vue CLI / alternative
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:4173",
+    "http://127.0.0.1:8080",
+    # ── Production Netlify ───────────────────────────────────────────────
+    "https://prclaravi.netlify.app",
+    # ── Production Zeabur (frontend si hébergé là aussi) ────────────────
+    "https://pybackend.zeabur.app",
+    # ── Domains Zeabur / Render / Koyeb génériques ──────────────────────
+    "https://claraverse.zeabur.app",
+]
+
+# Support variable d'environnement pour les déploiements custom
+_env_origins = os.getenv("ALLOWED_ORIGINS", "")
+_extra_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+ALLOWED_ORIGINS = _DEFAULT_ORIGINS + _extra_origins
+
+logger.info(f"🌍 CORS — Origines autorisées ({len(ALLOWED_ORIGINS)}) : {ALLOWED_ORIGINS}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,           # Autorise les cookies / Authorization headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers",
+    ],
+    expose_headers=[
+        "Content-Disposition",        # Nécessaire pour le téléchargement de fichiers Word/Excel
+        "Content-Length",
+        "Content-Type",
+    ],
+    max_age=3600,                     # Cache preflight 1 heure
 )
 
 # Add global exception middleware
